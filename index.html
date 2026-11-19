@@ -11,6 +11,9 @@
 <meta name="geo.region" content="ID-JI">
 <meta name="geo.placename" content="Jombang">
 <meta name="theme-color" content="#8a4fd8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preload" as="image" href="assets/hero.webp" type="image/webp" fetchpriority="high">
 <link rel="canonical" href="https://sigmamusic.my.id/">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%238a4fd8'/%3E%3C/svg%3E">
 <meta property="og:type" content="website">
@@ -18,7 +21,7 @@
 <meta property="og:url" content="https://sigmamusic.my.id/">
 <meta property="og:title" content="Sigma Music: Rental Sound System & Perlengkapan Pesta Jombang">
 <meta property="og:description" content="Sewa sound system, lighting, panggung, tenda, dekorasi, kursi, meja, alat makan, dan fotografer. Melayani Jombang dan sekitarnya. WhatsApp 0858-1668-6900.">
-<meta property="og:image" content="https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Beach-Please-2022-crowd-stage-lights-night-performance.jpg/1280px-Beach-Please-2022-crowd-stage-lights-night-performance.jpg">
+<meta property="og:image" content="https://sigmamusic.my.id/assets/hero.webp">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="854">
 <meta property="og:image:alt" content="Lampu panggung menyapu kerumunan saat acara malam, rental Sigma Music Jombang">
@@ -26,7 +29,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Sigma Music: Rental Sound System & Perlengkapan Pesta Jombang">
 <meta name="twitter:description" content="Sewa sound system, lighting, panggung, tenda, dekorasi, kursi, meja, alat makan, dan fotografer. Jombang. WhatsApp 0858-1668-6900.">
-<meta name="twitter:image" content="https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Beach-Please-2022-crowd-stage-lights-night-performance.jpg/1280px-Beach-Please-2022-crowd-stage-lights-night-performance.jpg">
+<meta name="twitter:image" content="https://sigmamusic.my.id/assets/hero.webp">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -59,7 +62,7 @@
 }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500&family=Onest:wght@400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
 
@@ -161,7 +164,7 @@
 <script>window.hallmarkSlots = (m) => { for (const [k, v] of Object.entries(m)) { const s = document.querySelector(`[data-slot="${k}"]`); if (!s) continue; const im = new Image(); im.src = typeof v === 'string' ? v : v.src; im.alt = (typeof v === 'object' && v.alt) || s.dataset.alt || ''; s.querySelectorAll(':scope > img').forEach((o) => o.remove()); s.prepend(im); } };
 document.querySelectorAll('[data-slot] img').forEach((i) => { if (i.complete && !i.naturalWidth) i.remove(); else i.addEventListener('error', () => i.remove(), { once: true }); });
 window.hallmarkSlots({
-  hero: { src: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Beach-Please-2022-crowd-stage-lights-night-performance.jpg/1280px-Beach-Please-2022-crowd-stage-lights-night-performance.jpg", alt: "lampu panggung menyapu kerumunan saat acara malam" },
+  hero: { src: "assets/hero.webp", alt: "lampu panggung menyapu kerumunan saat acara malam" },
   service: { src: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Behringer_X32_Digital_Mixer_in_operation_-_angled_%282017-07-21_17.23.52_%40pxhere_174508%29.jpg/1280px-Behringer_X32_Digital_Mixer_in_operation_-_angled_%282017-07-21_17.23.52_%40pxhere_174508%29.jpg", alt: "tangan mengatur mixer digital yang menyala" }
 });
 </script>
