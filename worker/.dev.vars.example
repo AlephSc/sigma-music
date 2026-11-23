@@ -1,0 +1,12 @@
+# Copy to .dev.vars for local `wrangler dev` (never commit .dev.vars)
+DATABASE_URL=postgresql://user:pass@ep-example.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+# Single key or comma-separated multiple OpenRouter keys for automatic failover:
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_API_KEYS=sk-or-v1-key1,sk-or-v1-key2
+GEMINI_API_KEY=
+ADMIN_EMAIL=admin@sigmamusic.my.id
+ADMIN_PASSWORD=ganti-password-kuat
+JWT_SECRET=ganti-secret-minimal-32-karakter-acak
+HOME_SERVER_WEBHOOK_URL=
+WEBHOOK_SECRET=
+SYNC_API_KEY=

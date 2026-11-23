@@ -1,2 +1,8 @@
 node_modules/
 .vercel/
+.next/
+.wrangler/
+.dev.vars
+.env.local
+.env.*.local
+backups/

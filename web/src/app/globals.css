@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg-page: #fbf8fc;
+  --bg-lowest: #ffffff;
+  --bg-card: #ffffff;
+  --bg-elevated: #f6f2f7;
+  --bg-chip: #f0edf1;
+  --border-subtle: #e4e1e6;
+  --text-primary: #1b1b1e;
+  --text-secondary: #4a4455;
+  --text-muted: #7b7486;
+  --accent: #6d28d9;
+  --accent-hover: #5b21b6;
+  --accent-soft: #f5f3ff;
+  --accent-text: #6d28d9;
+}
+
+.dark {
+  --bg-page: #14121d;
+  --bg-lowest: #0f0d18;
+  --bg-card: #1c1a26;
+  --bg-elevated: #201e2a;
+  --bg-chip: #2b2835;
+  --border-subtle: rgba(73, 68, 84, 0.55);
+  --text-primary: #e6e0f1;
+  --text-secondary: #cbc3d7;
+  --text-muted: #958ea0;
+  --accent: #8b5cf6;
+  --accent-hover: #7c3aed;
+  --accent-soft: rgba(139, 92, 246, 0.18);
+  --accent-text: #a78bfa;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5.5rem;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
