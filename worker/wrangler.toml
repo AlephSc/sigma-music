@@ -4,7 +4,7 @@ compatibility_date = "2025-02-14"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ALLOWED_ORIGINS = "https://sigmamusic.my.id,https://web-black-psi-50.vercel.app,http://localhost:3000"
+ALLOWED_ORIGINS = "https://sigmamusic.my.id,https://www.sigmamusic.my.id,https://sigma-music.vercel.app,http://localhost:3000"
 OPENROUTER_MODEL = "openrouter/auto"
 OPENROUTER_FALLBACK_MODEL = "google/gemini-2.0-flash-exp:free"
 GEMINI_EMBED_MODEL = "text-embedding-004"
