@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 56" width="260" height="56" fill="none">
+  <rect width="260" height="56" rx="12" fill="#14121D"/>
+  <text x="24" y="37" font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" font-size="26" font-weight="800" letter-spacing="-1" fill="#E6E0F1">sigma</text>
+  <circle cx="109" cy="33" r="3.5" fill="#8B5CF6"/>
+  <text x="121" y="37" font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="-0.5" fill="#CBC3D7">music</text>
+</svg>

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BrandLogo } from '@/components/BrandLogo';
 import { WA_DISPLAY, WA_NUMBER } from '@/lib/api';
 
 export function SiteFooter() {
@@ -7,13 +8,8 @@ export function SiteFooter() {
       <div className="mx-auto max-w-7xl px-4 lg:px-8">
         <div className="grid grid-cols-1 gap-8 md:grid-cols-12">
           <div className="space-y-3 md:col-span-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] font-display text-base font-extrabold text-white">
-                s
-              </div>
-              <span className="font-display text-lg font-extrabold tracking-tight text-[var(--text-primary)]">
-                sigma music
-              </span>
+            <div>
+              <BrandLogo size="sm" />
             </div>
             <p className="max-w-sm text-sm leading-relaxed text-[var(--text-secondary)]">
               Solusi rental sound system, lighting panggung, tenda dekorasi, genset silent, dan

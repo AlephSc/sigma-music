@@ -4,6 +4,7 @@ import { Menu, Moon, Sun, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { BrandLogo } from '@/components/BrandLogo';
 import { WA_NUMBER } from '@/lib/api';
 
 export function SiteHeader() {
@@ -39,13 +40,8 @@ export function SiteHeader() {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/90 backdrop-blur-md">
       <div className="mx-auto flex h-20 max-w-7xl items-center justify-between gap-4 px-4 lg:px-8">
-        <Link href="/" className="group flex shrink-0 items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)] font-display text-lg font-extrabold text-white shadow-sm transition-colors group-hover:bg-[var(--accent-hover)]">
-            s
-          </div>
-          <span className="font-display text-xl font-extrabold tracking-tight text-[var(--text-primary)]">
-            sigma music
-          </span>
+        <Link href="/" className="group flex shrink-0 items-center">
+          <BrandLogo />
         </Link>
 
         <nav className="hidden items-center gap-7 lg:flex" aria-label="Navigasi utama">
