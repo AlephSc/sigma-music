@@ -1,9 +1,21 @@
 'use client';
 
 import { Minus, Send, ShieldCheck, X, Zap } from 'lucide-react';
-import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { sendChatMessage, WA_DISPLAY, WA_NUMBER } from '@/lib/api';
+
+function AiWaveMark({ className = 'h-7 w-7' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 40 40" fill="none" className={className} aria-hidden="true">
+      <rect width="40" height="40" rx="12" fill="currentColor" fillOpacity="0.16" />
+      <rect x="9" y="16" width="3" height="8" rx="1.5" fill="currentColor" />
+      <rect x="14.5" y="11" width="3" height="18" rx="1.5" fill="currentColor" />
+      <rect x="20" y="7" width="3" height="26" rx="1.5" fill="currentColor" />
+      <rect x="25.5" y="13" width="3" height="14" rx="1.5" fill="currentColor" />
+      <rect x="31" y="17" width="3" height="6" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
 
 interface Message {
   id: string;
@@ -111,8 +123,8 @@ export function ChatWidget() {
           aria-label="Buka asisten AI Sigma Music"
           className="fixed bottom-5 right-5 z-[400] flex items-center gap-2.5 rounded-full border border-[var(--border-subtle)] bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_32px_rgba(109,40,217,0.38)] transition hover:bg-[var(--accent-hover)] active:scale-95"
         >
-          <span className="relative flex h-7 w-7 items-center justify-center overflow-hidden rounded-xl bg-white/15">
-            <Image src="/assets/ai-logo.svg" alt="" width={28} height={28} />
+          <span className="flex h-7 w-7 items-center justify-center text-white">
+            <AiWaveMark className="h-7 w-7" />
           </span>
           <span>Sigma Audio AI</span>
         </button>
@@ -128,14 +140,8 @@ export function ChatWidget() {
           {/* 1. POPUP HEADER */}
           <header className="flex shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-card)] px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1">
-                <Image
-                  src="/assets/ai-logo.svg"
-                  alt="Sigma Audio AI Logo"
-                  width={40}
-                  height={40}
-                  className="h-full w-full object-contain"
-                />
+              <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--accent-text)]">
+                <AiWaveMark className="h-9 w-9" />
                 <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[var(--bg-card)] bg-emerald-400" />
               </div>
               <div>
@@ -206,14 +212,8 @@ export function ChatWidget() {
                 </div>
               ) : (
                 <div key={m.id} className="flex items-start gap-2.5">
-                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
-                    <Image
-                      src="/assets/ai-logo.svg"
-                      alt="AI Avatar"
-                      width={24}
-                      height={24}
-                      className="h-full w-full object-contain"
-                    />
+                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--accent-text)]">
+                    <AiWaveMark className="h-6 w-6" />
                   </div>
                   <div className="max-w-[86%] space-y-1.5">
                     <div className="rounded-2xl rounded-tl-xs border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5 text-xs leading-relaxed text-[var(--text-primary)] shadow-xs whitespace-pre-wrap">
@@ -238,8 +238,8 @@ export function ChatWidget() {
 
             {loading && (
               <div className="flex items-start gap-2.5">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
-                  <Image src="/assets/ai-logo.svg" alt="" width={24} height={24} />
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--accent-text)]">
+                  <AiWaveMark className="h-6 w-6" />
                 </div>
                 <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3.5 py-2.5 text-xs text-[var(--text-muted)]">
                   Sedang memeriksa paket &amp; jadwal...

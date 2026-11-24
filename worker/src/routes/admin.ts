@@ -296,6 +296,34 @@ adminRoutes.delete('/knowledge/:id', async (c) => {
 });
 
 /**
+ * P1: Re-embed all rag_chunks (e.g. seeded chunks or after switching embedder)
+ */
+adminRoutes.post('/knowledge/reindex', async (c) => {
+  const onlyMissing = c.req.query('missing') !== 'false';
+  const chunks = await queryWithRetry(c.env, async (sql) => {
+    return (onlyMissing
+      ? await sql`SELECT id, content FROM rag_chunks WHERE embedding IS NULL ORDER BY id ASC`
+      : await sql`SELECT id, content FROM rag_chunks ORDER BY id ASC`) as Array<{
+      id: number;
+      content: string;
+    }>;
+  });
+
+  let updated = 0;
+  for (const ch of chunks) {
+    const vec = await embedText(c.env, ch.content);
+    if (!vec) continue;
+    const vecLiteral = formatVectorLiteral(vec);
+    await queryWithRetry(c.env, async (sql) => {
+      await sql`UPDATE rag_chunks SET embedding = ${vecLiteral}::vector, updated_at = now() WHERE id = ${ch.id}`;
+    });
+    updated += 1;
+  }
+
+  return c.json({ ok: true, scanned: chunks.length, embedded: updated });
+});
+
+/**
  * Admin Chat Logs Viewer
  */
 adminRoutes.get('/chats', async (c) => {

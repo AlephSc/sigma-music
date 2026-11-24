@@ -3,7 +3,7 @@ import { signAdminJwt, verifyAdminJwt } from '../lib/auth';
 import { guardOutputPii, sanitizeChatInput } from '../lib/sanitize';
 import { createBookingSchema, normalizeIndonesianPhone } from '../lib/validation';
 import { chunkDocument } from '../rag/chunker';
-import { fuseRrf } from '../rag/retriever';
+import { buildOrTsQuery, fuseRrf } from '../rag/retriever';
 
 describe('Indonesian phone normalization', () => {
   it('normalizes 08..., +628..., 628..., and spaced numbers', () => {
@@ -98,5 +98,10 @@ describe('RAG Chunker & RRF Fusion', () => {
     ];
     const fused = fuseRrf(dense, keyword, 60, 3);
     expect(fused[0].id).toBe(2);
+  });
+
+  it('builds Indonesian token-OR tsquery while filtering stopwords', () => {
+    const q = buildOrTsQuery('Halo kak, berapa harga paket hajatan di Jombang?');
+    expect(q).toBe('harga | paket | hajatan | jombang');
   });
 });

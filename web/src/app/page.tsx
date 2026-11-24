@@ -209,25 +209,25 @@ export default function HomePage() {
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0f0d18]/85 via-transparent to-transparent" />
 
-                    <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#494454]/60 bg-[#14121d]/90 p-4 backdrop-blur-md">
+                    <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]/95 p-4 shadow-sm backdrop-blur-md">
                       <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2b2835] text-[#a78bfa]">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-[var(--accent-text)]">
                           <Activity className="h-5 w-5" />
                         </div>
                         <div className="text-left">
-                          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#958ea0]">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                             Live Monitoring
                           </div>
-                          <div className="num text-sm font-bold text-[#e6e0f1]">
+                          <div className="num text-sm font-bold text-[var(--text-primary)]">
                             128 dB Peak SPL / 0.003% THD
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="rounded-full bg-[#8b5cf6]/25 px-2.5 py-1 text-[11px] font-bold uppercase text-[#d0bcff]">
+                        <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-bold uppercase text-[var(--accent-text)]">
                           Dante Network
                         </span>
-                        <span className="rounded-full bg-[#2b2835] px-2.5 py-1 text-[11px] font-bold uppercase text-[#cbc3d7]">
+                        <span className="rounded-full bg-[var(--bg-chip)] px-2.5 py-1 text-[11px] font-bold uppercase text-[var(--text-secondary)]">
                           FOH Wireless
                         </span>
                       </div>
