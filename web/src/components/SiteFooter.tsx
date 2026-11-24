@@ -20,7 +20,8 @@ export function SiteFooter() {
               perlengkapan pesta profesional di Jombang dan Jawa Timur.
             </p>
             <p className="text-xs text-[var(--text-muted)]">
-              Pondok Pesantren Darul Ulum, Jl. Jenderal Sudirman Km 01, Peterongan, Jombang
+              Jl. KH. Rifai Romly RT.30/RW.04, Wonokerto Selatan, Peterongan, Kec. Peterongan,
+              Kabupaten Jombang, Jawa Timur 61481
             </p>
           </div>
 

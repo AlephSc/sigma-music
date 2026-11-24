@@ -30,9 +30,10 @@ const localBusinessJsonLd = {
   telephone: '+6285816686900',
   address: {
     '@type': 'PostalAddress',
-    streetAddress: 'Pondok Pesantren Darul Ulum, Jl. Jenderal Sudirman Km 01',
+    streetAddress: 'Jl. KH. Rifai Romly RT.30/RW.04, Wonokerto Selatan',
     addressLocality: 'Peterongan, Jombang',
     addressRegion: 'Jawa Timur',
+    postalCode: '61481',
     addressCountry: 'ID',
   },
   areaServed: ['Jombang', 'Mojokerto', 'Kediri', 'Surabaya', 'Nganjuk'],
@@ -401,8 +402,8 @@ export default function HomePage() {
                           Studio &amp; Gudang Logistik
                         </div>
                         <div className="text-xs text-[var(--text-secondary)]">
-                          Pondok Pesantren Darul Ulum, Jl. Jenderal Sudirman Km 01, Peterongan,
-                          Jombang, Jawa Timur
+                          Jl. KH. Rifai Romly RT.30/RW.04, Wonokerto Selatan, Peterongan, Kec.
+                          Peterongan, Kabupaten Jombang, Jawa Timur 61481
                         </div>
                       </div>
                     </div>

@@ -25,7 +25,7 @@ VALUES (
   '## 3. Layanan Tambahan (Service & Las)\n'
   '- Sigma Music juga melayani jasa perbaikan/service peralatan elektronik rumah tangga (seperti mesin cuci) dan pekerjaan las ringan di area Jombang.\n\n'
   '## 4. Area Layanan & Lokasi Pangkalan\n'
-  '- Pangkalan: Pondok Pesantren Darul Ulum, Jl. Jenderal Sudirman Km 01, Peterongan, Jombang, Jawa Timur.\n'
+  '- Pangkalan: Jl. KH. Rifai Romly RT.30/RW.04, Wonokerto Selatan, Peterongan, Kec. Peterongan, Kabupaten Jombang, Jawa Timur 61481.\n'
   '- Area layanan utama: Seluruh Jombang kota dan kabupaten (Peterongan, Jombang, Mojoagung, Diwek, Ploso, Perak, Mojowarno, dll).\n'
   '- Luar kota: Mojokerto, Kediri, Nganjuk, dan Surabaya (khusus acara skala menengah/besar).\n\n'
   '## 5. Ketentuan Booking, DP & Pelunasan\n'
@@ -57,7 +57,7 @@ VALUES
   (
     '11111111-1111-4111-8111-111111111111',
     2,
-    'Lokasi & Area Layanan Sigma Music: Pangkalan di Pondok Pesantren Darul Ulum, Jl. Jenderal Sudirman Km 01, Peterongan, Jombang, Jawa Timur. Melayani seluruh Jombang kota & kabupaten, serta Mojokerto, Kediri, Nganjuk, dan Surabaya untuk acara besar. Tersedia juga jasa service mesin cuci dan las di Jombang.',
+    'Lokasi & Area Layanan Sigma Music: Pangkalan di Jl. KH. Rifai Romly RT.30/RW.04, Wonokerto Selatan, Peterongan, Kec. Peterongan, Kabupaten Jombang, Jawa Timur 61481. Melayani seluruh Jombang kota & kabupaten, serta Mojokerto, Kediri, Nganjuk, dan Surabaya untuk acara besar. Tersedia juga jasa service mesin cuci dan las di Jombang.',
     'Area Layanan & Jasa Tambahan',
     'seed-chunk-2'
   ),
