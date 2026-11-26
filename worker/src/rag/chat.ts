@@ -330,7 +330,28 @@ ATURAN KETAT:
 KONTEKS DOKUMEN RESMI:
 ${contextBlock || '(Belum ada dokumen terindeks)'}`;
 
+  const persistTurn = async (replyText: string) => {
+    await queryWithRetry(env, async (sql) => {
+      const chunkIds = chunks.map((c) => c.id);
+      const userLogContent = input.flaggedInjection ? `[FLAGGED_INJECTION] ${input.message}` : input.message;
+      await sql`
+        INSERT INTO chat_messages (session_id, role, content, chunk_ids)
+        VALUES (${session.id}::uuid, 'user', ${userLogContent}, NULL)
+      `;
+      await sql`
+        INSERT INTO chat_messages (session_id, role, content, chunk_ids)
+        VALUES (${session.id}::uuid, 'assistant', ${replyText}, ${chunkIds})
+      `;
+      await sql`
+        UPDATE chat_sessions
+        SET turn_count = turn_count + 1, last_active = now()
+        WHERE id = ${session.id}::uuid
+      `;
+    });
+  };
+
   if (getOpenRouterKeys(env).length === 0) {
+    await persistTurn(fallbackReply);
     return {
       session_id: session.id,
       reply: fallbackReply,
@@ -348,6 +369,7 @@ ${contextBlock || '(Belum ada dokumen terindeks)'}`;
   const llmRes = await callOpenRouterWithFailover(env, messages, true);
 
   if (!llmRes.ok || !llmRes.message) {
+    await persistTurn(fallbackReply);
     return {
       session_id: session.id,
       reply: fallbackReply,
@@ -401,24 +423,7 @@ ${contextBlock || '(Belum ada dokumen terindeks)'}`;
   const rawReply = (finalMessage.content || '').trim() || fallbackReply;
   const safeReply = guardOutputPii(rawReply, waNumber);
 
-  // Persist user & assistant turns
-  await queryWithRetry(env, async (sql) => {
-    const chunkIds = chunks.map((c) => c.id);
-    const userLogContent = input.flaggedInjection ? `[FLAGGED_INJECTION] ${input.message}` : input.message;
-    await sql`
-      INSERT INTO chat_messages (session_id, role, content, chunk_ids)
-      VALUES (${session.id}::uuid, 'user', ${userLogContent}, NULL)
-    `;
-    await sql`
-      INSERT INTO chat_messages (session_id, role, content, chunk_ids)
-      VALUES (${session.id}::uuid, 'assistant', ${safeReply}, ${chunkIds})
-    `;
-    await sql`
-      UPDATE chat_sessions
-      SET turn_count = turn_count + 1, last_active = now()
-      WHERE id = ${session.id}::uuid
-    `;
-  });
+  await persistTurn(safeReply);
 
   return {
     session_id: session.id,

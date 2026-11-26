@@ -3,7 +3,7 @@ import { queryWithRetry } from '../db/client';
 import { hashIp } from '../lib/auth';
 import { checkRateLimit } from '../lib/rateLimit';
 import { sanitizeChatInput } from '../lib/sanitize';
-import { chatRequestSchema, createBookingSchema, monthRegex } from '../lib/validation';
+import { chatRequestSchema, createBookingSchema, isValidMonth } from '../lib/validation';
 import { dispatchBookingWebhook } from '../lib/webhook';
 import { handleChatTurn } from '../rag/chat';
 import type { DayAvailabilityStatus, Env } from '../types';
@@ -14,20 +14,23 @@ function getClientIp(req: Request): string {
   return req.headers.get('CF-Connecting-IP') || req.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || '127.0.0.1';
 }
 
+/**
+ * GET /v1/health — minimal health check without leaking internal DB state (F-27).
+ */
 publicRoutes.get('/health', async (c) => {
   if (!c.env.DATABASE_URL) {
-    return c.json({ ok: true, db: 'unconfigured' });
+    return c.json({ ok: true });
   }
   try {
     await queryWithRetry(c.env, async (sql) => sql`SELECT 1 AS ok`);
-    return c.json({ ok: true, db: 'connected' });
-  } catch (err) {
+    return c.json({ ok: true });
+  } catch {
     return c.json(
       {
         type: 'about:blank',
-        title: 'Database Unavailable',
+        title: 'Service Unavailable',
         status: 503,
-        detail: err instanceof Error ? err.message : 'Database connection failed',
+        detail: 'Layanan sedang mengalami gangguan sementara.',
       },
       503
     );
@@ -36,13 +39,21 @@ publicRoutes.get('/health', async (c) => {
 
 /**
  * GET /v1/availability?month=YYYY-MM
- * Returns non-PII day statuses for the requested month.
+ * - Validates semantic month 01-12 and year 2000-2100 (F-06).
+ * - Preserves booking count even when a date is closed (F-11).
+ * - Does not expose internal admin `reason` publicly (F-15).
+ * - Counts `completed` events as occupied/busy rather than free (F-16).
  */
 publicRoutes.get('/availability', async (c) => {
   const month = c.req.query('month') || new Date().toISOString().slice(0, 7);
-  if (!monthRegex.test(month)) {
+  if (!isValidMonth(month)) {
     return c.json(
-      { type: 'about:blank', title: 'Invalid Month', status: 400, detail: 'Parameter month harus berformat YYYY-MM' },
+      {
+        type: 'about:blank',
+        title: 'Invalid Month',
+        status: 400,
+        detail: 'Parameter month harus berformat YYYY-MM dengan bulan 01-12 dan tahun 2000-2100',
+      },
       400
     );
   }
@@ -60,21 +71,21 @@ publicRoutes.get('/availability', async (c) => {
       FROM bookings
       WHERE event_date >= ${startDate}::date
         AND event_date <= ${endDate}::date
-        AND status IN ('pending', 'booked', 'in_progress')
+        AND status IN ('pending', 'booked', 'in_progress', 'completed')
     `) as Array<{ event_date: string; status: string }>;
 
     const blocks = (await sql`
-      SELECT event_date::text AS event_date, reason
+      SELECT event_date::text AS event_date
       FROM date_blocks
       WHERE event_date >= ${startDate}::date
         AND event_date <= ${endDate}::date
-    `) as Array<{ event_date: string; reason: string | null }>;
+    `) as Array<{ event_date: string }>;
 
     const counts = new Map<string, { pending: number; active: number; inProgress: number }>();
     for (const row of bookings) {
       const entry = counts.get(row.event_date) ?? { pending: 0, active: 0, inProgress: 0 };
       if (row.status === 'pending') entry.pending += 1;
-      if (row.status === 'booked') entry.active += 1;
+      if (row.status === 'booked' || row.status === 'completed') entry.active += 1;
       if (row.status === 'in_progress') {
         entry.active += 1;
         entry.inProgress += 1;
@@ -82,24 +93,26 @@ publicRoutes.get('/availability', async (c) => {
       counts.set(row.event_date, entry);
     }
 
-    const blockMap = new Map<string, string | null>(blocks.map((b) => [b.event_date, b.reason]));
-    const days: Array<{ date: string; status: DayAvailabilityStatus; count: number; reason?: string | null }> = [];
+    const blockedSet = new Set<string>(blocks.map((b) => b.event_date));
+    const days: Array<{ date: string; status: DayAvailabilityStatus; count: number }> = [];
 
     for (let d = 1; d <= lastDay; d++) {
       const dateStr = `${yearStr}-${monthStr}-${String(d).padStart(2, '0')}`;
-      if (blockMap.has(dateStr)) {
-        days.push({ date: dateStr, status: 'closed', count: 0, reason: blockMap.get(dateStr) });
+      const cEntry = counts.get(dateStr);
+      const totalCount = cEntry ? cEntry.active + cEntry.pending : 0;
+
+      if (blockedSet.has(dateStr)) {
+        days.push({ date: dateStr, status: 'closed', count: totalCount });
         continue;
       }
-      const cEntry = counts.get(dateStr);
       if (!cEntry) {
         days.push({ date: dateStr, status: 'free', count: 0 });
       } else if (cEntry.inProgress > 0) {
-        days.push({ date: dateStr, status: 'in_progress', count: cEntry.active + cEntry.pending });
+        days.push({ date: dateStr, status: 'in_progress', count: totalCount });
       } else if (cEntry.active > 0) {
-        days.push({ date: dateStr, status: 'busy', count: cEntry.active + cEntry.pending });
+        days.push({ date: dateStr, status: 'busy', count: totalCount });
       } else {
-        days.push({ date: dateStr, status: 'pending', count: cEntry.pending });
+        days.push({ date: dateStr, status: 'pending', count: totalCount });
       }
     }
 
@@ -132,13 +145,51 @@ publicRoutes.get('/packages', (c) => {
 
 /**
  * POST /v1/bookings
- * Public booking request submission (always stored as `pending`).
- * Rate-limited to 3/hour per IP, protected by honeypot field `website`.
+ * - Validates JSON & schema BEFORE consuming valid-booking quota so user typos don't lock them out (F-09).
+ * - Separate loose abuse cap (30/hr) for malformed requests, and 10 valid bookings/hr per IP.
  */
 publicRoutes.post('/bookings', async (c) => {
   const ip = getClientIp(c.req.raw);
   const ipHash = await hashIp(ip);
-  const rl = await checkRateLimit(c.env, `booking:${ipHash}`, 3, 3600);
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    const abuse = await checkRateLimit(c.env, `booking-invalid:${ipHash}`, 30, 3600);
+    if (!abuse.allowed) {
+      return c.json(
+        { type: 'about:blank', title: 'Terlalu Banyak Permintaan', status: 429, detail: 'Coba lagi nanti.' },
+        429,
+        { 'Retry-After': String(abuse.retryAfterSeconds) }
+      );
+    }
+    return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus berupa JSON valid' }, 400);
+  }
+
+  const parsed = createBookingSchema.safeParse(body);
+  if (!parsed.success) {
+    const abuse = await checkRateLimit(c.env, `booking-invalid:${ipHash}`, 30, 3600);
+    if (!abuse.allowed) {
+      return c.json(
+        { type: 'about:blank', title: 'Terlalu Banyak Permintaan', status: 429, detail: 'Coba lagi nanti.' },
+        429,
+        { 'Retry-After': String(abuse.retryAfterSeconds) }
+      );
+    }
+    return c.json(
+      {
+        type: 'about:blank',
+        title: 'Validasi Gagal',
+        status: 400,
+        detail: parsed.error.issues.map((i) => i.message).join('; '),
+      },
+      400
+    );
+  }
+
+  // Consume valid booking quota only after validation passes (F-09)
+  const rl = await checkRateLimit(c.env, `booking:${ipHash}`, 10, 3600);
   if (!rl.allowed) {
     return c.json(
       {
@@ -152,27 +203,7 @@ publicRoutes.post('/bookings', async (c) => {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus berupa JSON valid' }, 400);
-  }
-
-  const parsed = createBookingSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json(
-      {
-        type: 'about:blank',
-        title: 'Validasi Gagal',
-        status: 400,
-        detail: parsed.error.issues.map((i) => i.message).join('; '),
-      },
-      400
-    );
-  }
-
-  // Honeypot check: silently pretend success to confuse bots without writing DB
+  // Honeypot check
   if (parsed.data.website && parsed.data.website.trim().length > 0) {
     return c.json(
       {
@@ -187,10 +218,10 @@ publicRoutes.post('/bookings', async (c) => {
   const d = parsed.data;
   const created = await queryWithRetry(c.env, async (sql) => {
     const blocked = (await sql`
-      SELECT reason FROM date_blocks WHERE event_date = ${d.event_date}::date
-    `) as Array<{ reason: string | null }>;
+      SELECT event_date FROM date_blocks WHERE event_date = ${d.event_date}::date
+    `) as Array<{ event_date: string }>;
     if (blocked.length > 0) {
-      return { blocked: true as const, reason: blocked[0].reason };
+      return { blocked: true as const };
     }
 
     const rows = (await sql`
@@ -233,7 +264,7 @@ publicRoutes.post('/bookings', async (c) => {
         type: 'about:blank',
         title: 'Tanggal Ditutup',
         status: 409,
-        detail: `Tanggal ${d.event_date} sedang ditutup (${created.reason || 'Penuh / Perbaikan'}). Silakan pilih tanggal lain atau hubungi WhatsApp kami.`,
+        detail: `Tanggal ${d.event_date} sedang ditutup. Silakan pilih tanggal lain atau hubungi WhatsApp 0858-1668-6900.`,
       },
       409
     );
@@ -270,7 +301,7 @@ publicRoutes.post('/bookings', async (c) => {
 
 /**
  * POST /v1/chat
- * RAG AI Chatbot endpoint (rate-limited 15 msg/min per IP).
+ * RAG AI Chatbot endpoint — rate-limited per IP (15/min) AND per session_id (10/min) (F-13).
  */
 publicRoutes.post('/chat', async (c) => {
   const ip = getClientIp(c.req.raw);
@@ -307,6 +338,22 @@ publicRoutes.post('/chat', async (c) => {
       },
       400
     );
+  }
+
+  if (parsed.data.session_id) {
+    const sessRl = await checkRateLimit(c.env, `chat-sess:${parsed.data.session_id}`, 10, 60);
+    if (!sessRl.allowed) {
+      return c.json(
+        {
+          type: 'about:blank',
+          title: 'Batas Chat Sesi Tercapai',
+          status: 429,
+          detail: 'Tunggu sebentar sebelum mengirim pesan berikutnya atau hubungi WhatsApp 0858-1668-6900.',
+        },
+        429,
+        { 'Retry-After': String(sessRl.retryAfterSeconds) }
+      );
+    }
   }
 
   const sanitized = sanitizeChatInput(parsed.data.message);

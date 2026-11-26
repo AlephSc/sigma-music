@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeOrigin } from '../index';
 import { signAdminJwt, verifyAdminJwt } from '../lib/auth';
 import { guardOutputPii, sanitizeChatInput } from '../lib/sanitize';
-import { createBookingSchema, normalizeIndonesianPhone } from '../lib/validation';
+import {
+  cleanDisplayText,
+  createBookingSchema,
+  isValidCalendarDate,
+  isValidMonth,
+  normalizeIndonesianPhone,
+  updateBookingSchema,
+} from '../lib/validation';
 import { chunkDocument } from '../rag/chunker';
 import { buildOrTsQuery, fuseRrf } from '../rag/retriever';
 
@@ -103,5 +111,49 @@ describe('RAG Chunker & RRF Fusion', () => {
   it('builds Indonesian token-OR tsquery while filtering stopwords', () => {
     const q = buildOrTsQuery('Halo kak, berapa harga paket hajatan di Jombang?');
     expect(q).toBe('harga | paket | hajatan | jombang');
+  });
+});
+
+describe('Pentest regression guards (F-01, F-05, F-06, F-07, F-22, F-23)', () => {
+  it('returns null (never throws) on malformed JWT signature segments (F-05)', async () => {
+    const secret = 'super-secret-test-key-minimum-32-chars';
+    expect(await verifyAdminJwt('e30.e30.x', secret)).toBeNull();
+    expect(await verifyAdminJwt('e30.e30.???', secret)).toBeNull();
+    expect(await verifyAdminJwt('!!!!.????.####', secret)).toBeNull();
+  });
+
+  it('rejects impossible calendar dates and months (F-06, F-07)', () => {
+    expect(isValidCalendarDate('2026-02-30')).toBe(false);
+    expect(isValidCalendarDate('2026-13-01')).toBe(false);
+    expect(isValidCalendarDate('0000-01-01')).toBe(false);
+    expect(isValidCalendarDate('2026-12-30')).toBe(true);
+
+    expect(isValidMonth('2026-13')).toBe(false);
+    expect(isValidMonth('2026-00')).toBe(false);
+    expect(isValidMonth('0000-01')).toBe(false);
+    expect(isValidMonth('2026-12')).toBe(true);
+  });
+
+  it('supports full admin PATCH fields, null total_price, and rejects unknown keys (F-01, F-17)', () => {
+    const ok = updateBookingSchema.safeParse({
+      event_date: '2027-01-15',
+      customer_name: 'Budi Baru',
+      customer_phone: '089999999999',
+      total_price: null,
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect(ok.data.customer_phone).toBe('6289999999999');
+      expect(ok.data.total_price).toBeNull();
+    }
+
+    const unknownField = updateBookingSchema.safeParse({ bogus_field: 'x' });
+    expect(unknownField.success).toBe(false);
+  });
+
+  it('normalizes CORS origins and strips bidi overrides (F-22, F-23)', () => {
+    expect(normalizeOrigin('HTTPS://WWW.SIGMAMUSIC.MY.ID:443')).toBe('https://www.sigmamusic.my.id');
+    expect(normalizeOrigin('https://sigmamusic.my.id.')).toBe('https://sigmamusic.my.id');
+    expect(cleanDisplayText('Paket \u202E spoof \u200E')).toBe('Paket  spoof');
   });
 });

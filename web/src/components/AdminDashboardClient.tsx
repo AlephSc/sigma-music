@@ -7,7 +7,10 @@ import {
   ClipboardList,
   LogOut,
   MessageSquare,
+  Pencil,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { WORKER_URL } from '@/lib/api';
@@ -58,6 +61,8 @@ const STATUS_BADGE: Record<BookingStatus, string> = {
   cancelled: 'bg-rose-500/15 text-rose-400 border-rose-500/40',
 };
 
+const PAGE_LIMIT = 20;
+
 export function AdminDashboardClient() {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -67,6 +72,9 @@ export function AdminDashboardClient() {
 
   const [tab, setTab] = useState<'bookings' | 'blocks' | 'knowledge' | 'chats'>('bookings');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [totalBookings, setTotalBookings] = useState(0);
 
   const [bookings, setBookings] = useState<AdminBooking[]>([]);
   const [blocks, setBlocks] = useState<DateBlock[]>([]);
@@ -74,6 +82,19 @@ export function AdminDashboardClient() {
   const [chats, setChats] = useState<ChatSessionLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  // Edit booking state (F-01)
+  const [editing, setEditing] = useState<AdminBooking | null>(null);
+  const [editForm, setEditForm] = useState({
+    event_date: '',
+    package: '',
+    customer_name: '',
+    customer_phone: '',
+    customer_address: '',
+    notes: '',
+    total_price: '',
+  });
 
   const [blockDate, setBlockDate] = useState('');
   const [blockReason, setBlockReason] = useState('Kru Libur / Perbaikan Alat');
@@ -114,9 +135,17 @@ export function AdminDashboardClient() {
     setActionError(null);
     try {
       if (tab === 'bookings') {
-        const q = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-        const data = (await authFetch(`/v1/admin/bookings${q}`)) as { bookings: AdminBooking[] };
+        const params = new URLSearchParams();
+        if (statusFilter !== 'all') params.set('status', statusFilter);
+        if (searchQuery.trim()) params.set('q', searchQuery.trim());
+        params.set('limit', String(PAGE_LIMIT));
+        params.set('offset', String(offset));
+        const data = (await authFetch(`/v1/admin/bookings?${params.toString()}`)) as {
+          bookings: AdminBooking[];
+          total: number;
+        };
         setBookings(data.bookings || []);
+        setTotalBookings(data.total ?? data.bookings?.length ?? 0);
       } else if (tab === 'blocks') {
         const data = (await authFetch('/v1/admin/blocks')) as { blocks: DateBlock[] };
         setBlocks(data.blocks || []);
@@ -132,7 +161,7 @@ export function AdminDashboardClient() {
     } finally {
       setLoading(false);
     }
-  }, [token, tab, statusFilter, authFetch]);
+  }, [token, tab, statusFilter, searchQuery, offset, authFetch]);
 
   useEffect(() => {
     loadTabData();
@@ -162,6 +191,21 @@ export function AdminDashboardClient() {
     }
   }
 
+  async function handleLogout() {
+    try {
+      if (token) {
+        await fetch(`${WORKER_URL}/v1/admin/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch {
+      // ignore network error on logout
+    }
+    window.sessionStorage.removeItem('sigma_admin_jwt');
+    setToken(null);
+  }
+
   async function handleStatusChange(id: string, nextStatus: BookingStatus) {
     setActionError(null);
     try {
@@ -175,15 +219,73 @@ export function AdminDashboardClient() {
     }
   }
 
+  function openEditModal(b: AdminBooking) {
+    setEditing(b);
+    setEditForm({
+      event_date: b.event_date,
+      package: b.package,
+      customer_name: b.customer_name,
+      customer_phone: b.customer_phone,
+      customer_address: b.customer_address || '',
+      notes: b.notes || '',
+      total_price: b.total_price === null || b.total_price === undefined ? '' : String(b.total_price),
+    });
+  }
+
+  async function handleSaveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    setActionError(null);
+    try {
+      const priceVal =
+        editForm.total_price.trim() === '' ? null : Number(editForm.total_price.trim());
+      await authFetch(`/v1/admin/bookings/${editing.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          event_date: editForm.event_date,
+          package: editForm.package,
+          customer_name: editForm.customer_name,
+          customer_phone: editForm.customer_phone,
+          customer_address: editForm.customer_address || null,
+          notes: editForm.notes || null,
+          total_price: priceVal,
+        }),
+      });
+      setEditing(null);
+      setActionNotice('Perubahan booking tersimpan.');
+      await loadTabData();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Gagal menyimpan perubahan');
+    }
+  }
+
+  async function handleDeleteBooking(id: string, customerName: string) {
+    if (!window.confirm(`Hapus permanen booking atas nama "${customerName}"?`)) return;
+    setActionError(null);
+    try {
+      await authFetch(`/v1/admin/bookings/${id}`, { method: 'DELETE' });
+      setActionNotice('Booking berhasil dihapus.');
+      await loadTabData();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Gagal menghapus booking');
+    }
+  }
+
   async function handleAddBlock(e: React.FormEvent) {
     e.preventDefault();
     if (!blockDate) return;
     setActionError(null);
+    setActionNotice(null);
     try {
-      await authFetch('/v1/admin/blocks', {
+      const res = (await authFetch('/v1/admin/blocks', {
         method: 'POST',
         body: JSON.stringify({ event_date: blockDate, reason: blockReason }),
-      });
+      })) as { existing_bookings_count?: number };
+      if ((res.existing_bookings_count ?? 0) > 0) {
+        setActionNotice(
+          `Tanggal ${blockDate} ditutup. Perhatian: sudah ada ${res.existing_bookings_count} permohonan/booking pada tanggal ini.`
+        );
+      }
       setBlockDate('');
       await loadTabData();
     } catch (err) {
@@ -233,11 +335,13 @@ export function AdminDashboardClient() {
             </label>
             <input
               id="admin_email"
+              name="email"
               type="email"
+              autoComplete="username"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@sigmamusic.my.id"
+              placeholder="Masukkan email admin"
               className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3.5 py-2.5 text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
@@ -247,7 +351,9 @@ export function AdminDashboardClient() {
             </label>
             <input
               id="admin_password"
+              name="password"
               type="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -300,14 +406,7 @@ export function AdminDashboardClient() {
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            window.sessionStorage.removeItem('sigma_admin_jwt');
-            setToken(null);
-          }}
-          className={tabBtnClass(false)}
-        >
+        <button type="button" onClick={handleLogout} className={tabBtnClass(false)}>
           <LogOut className="h-4 w-4" />
           <span>Keluar</span>
         </button>
@@ -318,24 +417,48 @@ export function AdminDashboardClient() {
           {actionError}
         </div>
       )}
+      {actionNotice && (
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-400">
+          {actionNotice}
+        </div>
+      )}
 
       {tab === 'bookings' && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {(['all', 'pending', 'booked', 'in_progress', 'completed', 'cancelled'] as const).map((st) => (
-              <button
-                key={st}
-                type="button"
-                onClick={() => setStatusFilter(st)}
-                className={`rounded-full border px-3.5 py-1.5 text-xs font-medium capitalize transition ${
-                  statusFilter === st
-                    ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
-                    : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)]'
-                }`}
-              >
-                {st === 'all' ? 'Semua' : st}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {(['all', 'pending', 'booked', 'in_progress', 'completed', 'cancelled'] as const).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter(st);
+                    setOffset(0);
+                  }}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs font-medium capitalize transition ${
+                    statusFilter === st
+                      ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                      : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {st === 'all' ? 'Semua' : st}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-muted)]" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setOffset(0);
+                }}
+                placeholder="Cari nama, WA, paket..."
+                className="w-full rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] py-2 pl-9 pr-4 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
+              />
+            </div>
           </div>
 
           {loading ? (
@@ -383,20 +506,25 @@ export function AdminDashboardClient() {
                         </a>
                       </p>
                       <p className="text-sm text-[var(--text-secondary)]">Paket: {b.package}</p>
+                      {b.total_price !== null && (
+                        <p className="num text-xs font-semibold text-emerald-400">
+                          Total: Rp {Number(b.total_price).toLocaleString('id-ID')}
+                        </p>
+                      )}
                       {b.customer_address && (
                         <p className="text-xs text-[var(--text-muted)]">Lokasi: {b.customer_address}</p>
                       )}
                       {b.notes && <p className="text-xs text-[var(--text-muted)]">Catatan: {b.notes}</p>}
                     </div>
 
-                    <div className="flex flex-wrap gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
                       {b.status === 'pending' && (
                         <button
                           type="button"
                           onClick={() => handleStatusChange(b.id, 'booked')}
                           className="rounded-full bg-emerald-600 px-3.5 py-2 font-semibold text-white hover:bg-emerald-700"
                         >
-                          Approve (Booked)
+                          Approve
                         </button>
                       )}
                       {b.status === 'booked' && (
@@ -405,7 +533,7 @@ export function AdminDashboardClient() {
                           onClick={() => handleStatusChange(b.id, 'in_progress')}
                           className="rounded-full bg-amber-600 px-3.5 py-2 font-semibold text-white hover:bg-amber-700"
                         >
-                          Mulai (In Progress)
+                          In Progress
                         </button>
                       )}
                       {b.status === 'in_progress' && (
@@ -414,22 +542,191 @@ export function AdminDashboardClient() {
                           onClick={() => handleStatusChange(b.id, 'completed')}
                           className="rounded-full bg-[var(--accent)] px-3.5 py-2 font-semibold text-white hover:bg-[var(--accent-hover)]"
                         >
-                          Selesai (Completed)
+                          Completed
                         </button>
                       )}
                       {(b.status === 'pending' || b.status === 'booked') && (
                         <button
                           type="button"
                           onClick={() => handleStatusChange(b.id, 'cancelled')}
-                          className="rounded-full border border-rose-500/40 bg-rose-500/10 px-3.5 py-2 font-semibold text-rose-400 hover:bg-rose-500/20"
+                          className="rounded-full border border-rose-500/40 bg-rose-500/10 px-3 py-2 font-semibold text-rose-400 hover:bg-rose-500/20"
                         >
-                          Tolak / Batal
+                          Batal
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(b)}
+                        title="Edit booking"
+                        aria-label={`Edit booking ${b.customer_name}`}
+                        className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2 text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteBooking(b.id, b.customer_name)}
+                        title="Hapus booking"
+                        aria-label={`Hapus booking ${b.customer_name}`}
+                        className="rounded-full border border-rose-500/40 bg-rose-500/10 p-2 text-rose-400 hover:bg-rose-500/20"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </div>
                 </article>
               ))}
+
+              {totalBookings > PAGE_LIMIT && (
+                <div className="flex items-center justify-between pt-2 text-xs text-[var(--text-muted)]">
+                  <span>
+                    Menampilkan {offset + 1}–{Math.min(offset + PAGE_LIMIT, totalBookings)} dari {totalBookings}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={offset === 0}
+                      onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+                      className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3.5 py-1.5 disabled:opacity-40"
+                    >
+                      Sebelumnya
+                    </button>
+                    <button
+                      type="button"
+                      disabled={offset + PAGE_LIMIT >= totalBookings}
+                      onClick={() => setOffset(offset + PAGE_LIMIT)}
+                      className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3.5 py-1.5 disabled:opacity-40"
+                    >
+                      Berikutnya
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Edit Booking Modal */}
+          {editing && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+              <div className="w-full max-w-lg rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-6 shadow-2xl">
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="font-display text-lg font-bold text-[var(--text-primary)]">
+                    Edit Detail Booking
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setEditing(null)}
+                    aria-label="Tutup modal edit"
+                    className="rounded-full p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-chip)]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <form onSubmit={handleSaveEdit} className="space-y-3 text-sm">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                        Tanggal Acara
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={editForm.event_date}
+                        onChange={(e) => setEditForm({ ...editForm, event_date: e.target.value })}
+                        className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                        Total Harga (kosongkan untuk reset)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={editForm.total_price}
+                        onChange={(e) => setEditForm({ ...editForm, total_price: e.target.value })}
+                        placeholder="Rp"
+                        className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                      Paket
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editForm.package}
+                      onChange={(e) => setEditForm({ ...editForm, package: e.target.value })}
+                      className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                        Nama Pelanggan
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={editForm.customer_name}
+                        onChange={(e) => setEditForm({ ...editForm, customer_name: e.target.value })}
+                        className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                        Nomor WhatsApp
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={editForm.customer_phone}
+                        onChange={(e) => setEditForm({ ...editForm, customer_phone: e.target.value })}
+                        className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                      Alamat Acara
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.customer_address}
+                      onChange={(e) => setEditForm({ ...editForm, customer_address: e.target.value })}
+                      className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                      Catatan
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={editForm.notes}
+                      onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                      className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3 py-2 text-[var(--text-primary)]"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditing(null)}
+                      className="rounded-full border border-[var(--border-subtle)] px-4 py-2 text-xs font-semibold text-[var(--text-secondary)]"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-full bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-white hover:bg-[var(--accent-hover)]"
+                    >
+                      Simpan Perubahan
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
         </div>
@@ -459,7 +756,7 @@ export function AdminDashboardClient() {
             </div>
             <div>
               <label htmlFor="block_reason" className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
-                Alasan
+                Alasan (internal admin saja)
               </label>
               <input
                 id="block_reason"
@@ -526,6 +823,7 @@ export function AdminDashboardClient() {
                 type="text"
                 required
                 minLength={3}
+                maxLength={140}
                 placeholder="Misal: Daftar Harga Paket Sound 2027"
                 value={docTitle}
                 onChange={(e) => setDocTitle(e.target.value)}
@@ -534,13 +832,14 @@ export function AdminDashboardClient() {
             </div>
             <div>
               <label htmlFor="doc_content" className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
-                Isi Panduan (Markdown / Teks)
+                Isi Panduan (Markdown / Teks, maks 20.000 karakter)
               </label>
               <textarea
                 id="doc_content"
                 rows={7}
                 required
                 minLength={20}
+                maxLength={20000}
                 placeholder="# Paket Sound..."
                 value={docContent}
                 onChange={(e) => setDocContent(e.target.value)}

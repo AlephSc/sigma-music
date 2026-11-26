@@ -80,9 +80,39 @@ function formatReadableDate(dateStr: string): string {
   return `${d} ${MONTH_NAMES_ID[m - 1]} ${y}`;
 }
 
+const ALLOWED_QUERY_PACKAGES = new Set([
+  'Paket Akustik & Seminar',
+  'Paket Hajatan & Wedding',
+  'Paket Konser & Festival',
+  'Tenda Rigging & Sarnafil',
+  'Tata Cahaya & Stage Lighting',
+  'Genset Silent (Power Backup)',
+  'Panggung Modular & LED Rig',
+  'Peralatan Prasmanan & Catering',
+  'Fotografer & Live Streaming',
+  'Sound System 1000W (Acara Keluarga / Pengajian)',
+  'Sound System 2000W-3000W (Hajatan / Khitanan / Akad)',
+  'Sound System 5000W+ (Resepsi / Panggung Besar)',
+  'Lighting & Panggung Rigging',
+  'Tenda & Dekorasi Pelaminan',
+  'Kursi, Meja & Alat Makan',
+  'Jasa Fotografer Acara',
+  'Paket Lengkap (Custom sesuai kebutuhan)',
+]);
+
+function sanitizeQueryPaket(raw: string | null): string {
+  if (!raw) return '';
+  const cleaned = raw
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '')
+    .trim()
+    .slice(0, 80);
+  return ALLOWED_QUERY_PACKAGES.has(cleaned) ? cleaned : '';
+}
+
 export function CalendarBookingClient() {
   const searchParams = useSearchParams();
-  const initialPkg = searchParams.get('paket') || '';
+  const initialPkg = sanitizeQueryPaket(searchParams.get('paket'));
 
   const [currentMonth, setCurrentMonth] = useState<Date>(() => {
     const now = new Date();
@@ -545,9 +575,11 @@ export function CalendarBookingClient() {
                     onChange={(e) => setSelectedPackage(e.target.value)}
                     className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-lowest)] px-3.5 py-2.5 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
                   >
-                    {selectedPackage && !packages.some((p) => p.name === selectedPackage) && (
-                      <option value={selectedPackage}>{selectedPackage}</option>
-                    )}
+                    {selectedPackage &&
+                      ALLOWED_QUERY_PACKAGES.has(selectedPackage) &&
+                      !packages.some((p) => p.name === selectedPackage) && (
+                        <option value={selectedPackage}>{selectedPackage}</option>
+                      )}
                     {packages.length === 0 ? (
                       <option value="Paket Hajatan & Wedding">Paket Hajatan &amp; Wedding</option>
                     ) : (

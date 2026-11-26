@@ -1,18 +1,72 @@
 import { Hono } from 'hono';
 import { queryWithRetry } from '../db/client';
-import { constantTimeEqual, signAdminJwt, verifyAdminJwt } from '../lib/auth';
-import { dateBlockSchema, dateRegex, knowledgeUploadSchema, loginSchema, monthRegex, updateBookingSchema } from '../lib/validation';
+import {
+  constantTimeEqual,
+  hashIp,
+  isJwtRevoked,
+  revokeJwtJti,
+  signAdminJwt,
+  verifyAdminJwt,
+  type AdminJwtPayload,
+} from '../lib/auth';
+import { checkRateLimit } from '../lib/rateLimit';
+import {
+  dateBlockSchema,
+  isValidCalendarDate,
+  isValidMonth,
+  knowledgeUploadSchema,
+  loginSchema,
+  updateBookingSchema,
+  uuidRegex,
+} from '../lib/validation';
 import { chunkDocument, simpleHash } from '../rag/chunker';
 import { embedText, formatVectorLiteral } from '../rag/embedder';
 import type { BookingRow, Env } from '../types';
 
-export const adminRoutes = new Hono<{ Bindings: Env; Variables: { adminEmail: string } }>();
+export const adminRoutes = new Hono<{
+  Bindings: Env;
+  Variables: { adminEmail: string; adminPayload?: AdminJwtPayload };
+}>();
+
+function getClientIp(req: Request): string {
+  return req.headers.get('CF-Connecting-IP') || req.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || '127.0.0.1';
+}
+
+function normalizeBookingOutput(row: BookingRow): BookingRow {
+  return {
+    ...row,
+    total_price: row.total_price === null || row.total_price === undefined ? null : Number(row.total_price),
+  };
+}
+
+// Always set Cache-Control: no-store on every /v1/admin/* response (F-18)
+adminRoutes.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+});
 
 /**
  * POST /v1/admin/login
- * Verifies ADMIN_EMAIL + ADMIN_PASSWORD and returns a signed HS256 JWT.
+ * Rate-limited per IP and per email: 5 attempts / 15 minutes (F-03).
  */
 adminRoutes.post('/login', async (c) => {
+  const ip = getClientIp(c.req.raw);
+  const ipHash = await hashIp(ip);
+
+  const ipRl = await checkRateLimit(c.env, `login-ip:${ipHash}`, 5, 900);
+  if (!ipRl.allowed) {
+    return c.json(
+      {
+        type: 'about:blank',
+        title: 'Terlalu Banyak Percobaan Login',
+        status: 429,
+        detail: 'Terlalu banyak percobaan login gagal. Coba lagi dalam beberapa menit.',
+      },
+      429,
+      { 'Retry-After': String(ipRl.retryAfterSeconds) }
+    );
+  }
+
   let body: unknown;
   try {
     body = await c.req.json();
@@ -25,6 +79,21 @@ adminRoutes.post('/login', async (c) => {
     return c.json({ type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: 'Email dan password wajib diisi' }, 400);
   }
 
+  const emailNorm = parsed.data.email.trim().toLowerCase();
+  const emailRl = await checkRateLimit(c.env, `login-email:${emailNorm}`, 5, 900);
+  if (!emailRl.allowed) {
+    return c.json(
+      {
+        type: 'about:blank',
+        title: 'Terlalu Banyak Percobaan Login',
+        status: 429,
+        detail: 'Terlalu banyak percobaan login untuk akun ini. Coba lagi dalam beberapa menit.',
+      },
+      429,
+      { 'Retry-After': String(emailRl.retryAfterSeconds) }
+    );
+  }
+
   const expectedEmail = c.env.ADMIN_EMAIL || '';
   const expectedPass = c.env.ADMIN_PASSWORD || '';
   if (!expectedEmail || !expectedPass || !c.env.JWT_SECRET) {
@@ -34,27 +103,38 @@ adminRoutes.post('/login', async (c) => {
     );
   }
 
-  const emailOk = constantTimeEqual(parsed.data.email.trim().toLowerCase(), expectedEmail.trim().toLowerCase());
+  const emailOk = constantTimeEqual(emailNorm, expectedEmail.trim().toLowerCase());
   const passOk = constantTimeEqual(parsed.data.password, expectedPass);
 
   if (!emailOk || !passOk) {
     return c.json({ type: 'about:blank', title: 'Unauthorized', status: 401, detail: 'Email atau password salah' }, 401);
   }
 
-  const token = await signAdminJwt(expectedEmail, c.env.JWT_SECRET);
-  return c.json({ token, email: expectedEmail, expires_in: 86400 });
+  const ttlSeconds = 7200; // 2 hours (F-12)
+  const token = await signAdminJwt(expectedEmail, c.env.JWT_SECRET, ttlSeconds);
+  return c.json({ token, email: expectedEmail, expires_in: ttlSeconds });
 });
 
 /**
- * Auth middleware for all protected /v1/admin/* routes (except /login and /sync with SYNC_API_KEY).
+ * Auth + revocation + rate-limit middleware for all protected /v1/admin/* routes (F-05, F-12).
  */
 adminRoutes.use('*', async (c, next) => {
-  if (c.req.path.endsWith('/login')) {
+  if (c.req.path === '/v1/admin/login') {
     return next();
   }
 
-  // Allow P2 home server sync via dedicated SYNC_API_KEY header if configured
-  if (c.req.path.endsWith('/sync') && c.env.SYNC_API_KEY) {
+  const ip = getClientIp(c.req.raw);
+  const ipHash = await hashIp(ip);
+  const adminRl = await checkRateLimit(c.env, `admin-api:${ipHash}`, 120, 60);
+  if (!adminRl.allowed) {
+    return c.json(
+      { type: 'about:blank', title: 'Too Many Requests', status: 429, detail: 'Batas permintaan admin tercapai.' },
+      429,
+      { 'Retry-After': String(adminRl.retryAfterSeconds) }
+    );
+  }
+
+  if (c.req.path === '/v1/admin/sync' && c.env.SYNC_API_KEY) {
     const syncKey = c.req.header('X-Sync-Key');
     if (syncKey && constantTimeEqual(syncKey, c.env.SYNC_API_KEY)) {
       c.set('adminEmail', 'homeserver-sync');
@@ -73,23 +153,53 @@ adminRoutes.use('*', async (c, next) => {
     return c.json({ type: 'about:blank', title: 'Unauthorized', status: 401, detail: 'Token tidak valid atau kedaluwarsa' }, 401);
   }
 
+  if (await isJwtRevoked(c.env.RATE_LIMIT_KV, payload.jti)) {
+    return c.json({ type: 'about:blank', title: 'Unauthorized', status: 401, detail: 'Sesi sudah keluar (revoked)' }, 401);
+  }
+
   c.set('adminEmail', payload.email);
+  c.set('adminPayload', payload);
   return next();
 });
 
 /**
- * GET /v1/admin/bookings?status=&month=
- * Includes `same_date_count` for multi-booking warning badges.
+ * POST /v1/admin/logout — Server-side JWT revocation via KV denylist (F-12).
+ */
+adminRoutes.post('/logout', async (c) => {
+  const payload = c.get('adminPayload');
+  if (payload?.jti) {
+    await revokeJwtJti(c.env.RATE_LIMIT_KV, payload.jti, payload.exp);
+  }
+  return c.json({ ok: true, message: 'Sesi berhasil dicabut.' });
+});
+
+/**
+ * GET /v1/admin/bookings
+ * Supports case-insensitive `status`, `month`, `date_from`, `date_to`, `q`, `limit`, `offset` (F-10).
  */
 adminRoutes.get('/bookings', async (c) => {
-  const status = c.req.query('status');
-  const month = c.req.query('month');
+  const statusRaw = c.req.query('status')?.trim().toLowerCase();
+  const month = c.req.query('month')?.trim();
+  const dateFrom = c.req.query('date_from')?.trim();
+  const dateTo = c.req.query('date_to')?.trim();
+  const q = c.req.query('q')?.trim().toLowerCase();
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const offsetRaw = Number(c.req.query('offset') ?? 0);
 
-  if (month && !monthRegex.test(month)) {
-    return c.json({ type: 'about:blank', title: 'Invalid Month', status: 400, detail: 'Format month harus YYYY-MM' }, 400);
+  if (month && !isValidMonth(month)) {
+    return c.json({ type: 'about:blank', title: 'Invalid Month', status: 400, detail: 'Format month harus YYYY-MM (bulan 01-12)' }, 400);
+  }
+  if (dateFrom && !isValidCalendarDate(dateFrom)) {
+    return c.json({ type: 'about:blank', title: 'Invalid Date', status: 400, detail: 'Format date_from harus tanggal kalender valid YYYY-MM-DD' }, 400);
+  }
+  if (dateTo && !isValidCalendarDate(dateTo)) {
+    return c.json({ type: 'about:blank', title: 'Invalid Date', status: 400, detail: 'Format date_to harus tanggal kalender valid YYYY-MM-DD' }, 400);
   }
 
-  const rows = await queryWithRetry(c.env, async (sql) => {
+  const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+
+  const result = await queryWithRetry(c.env, async (sql) => {
     const allRows = (await sql`
       SELECT
         b.id,
@@ -117,21 +227,41 @@ adminRoutes.get('/bookings', async (c) => {
       ORDER BY b.event_date ASC, b.created_at DESC
     `) as BookingRow[];
 
-    return allRows.filter((r) => {
-      if (status && status !== 'all' && r.status !== status) return false;
-      if (month && !r.event_date.startsWith(month)) return false;
-      return true;
-    });
+    const filtered = allRows
+      .filter((r) => {
+        if (statusRaw && statusRaw !== 'all' && r.status !== statusRaw) return false;
+        if (month && !r.event_date.startsWith(month)) return false;
+        if (dateFrom && r.event_date < dateFrom) return false;
+        if (dateTo && r.event_date > dateTo) return false;
+        if (q) {
+          const hay = `${r.customer_name} ${r.customer_phone} ${r.package} ${r.customer_address || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .map(normalizeBookingOutput);
+
+    return {
+      total: filtered.length,
+      limit,
+      offset,
+      bookings: filtered.slice(offset, offset + limit),
+    };
   });
 
-  return c.json({ bookings: rows });
+  return c.json(result);
 });
 
 /**
  * PATCH /v1/admin/bookings/:id
+ * Supports editing all operational fields + clearing nullable fields like `total_price: null` (F-01, F-17).
  */
 adminRoutes.patch('/bookings/:id', async (c) => {
   const id = c.req.param('id');
+  if (!uuidRegex.test(id)) {
+    return c.json({ type: 'about:blank', title: 'Invalid ID', status: 400, detail: 'ID booking harus UUID valid' }, 400);
+  }
+
   let body: unknown;
   try {
     body = await c.req.json();
@@ -148,28 +278,40 @@ adminRoutes.patch('/bookings/:id', async (c) => {
   }
 
   const u = parsed.data;
+  const hasEventDate = u.event_date !== undefined;
+  const hasPackage = u.package !== undefined;
+  const hasCustomerName = u.customer_name !== undefined;
+  const hasCustomerPhone = u.customer_phone !== undefined;
+  const hasCustomerAddress = u.customer_address !== undefined;
+  const hasNotes = u.notes !== undefined;
+  const hasStatus = u.status !== undefined;
+  const hasTotalPrice = u.total_price !== undefined;
+  const hasSetupStart = u.setup_start !== undefined;
+  const hasSetupEnd = u.setup_end !== undefined;
+
   const updated = await queryWithRetry(c.env, async (sql) => {
-    const existing = (await sql`
-      SELECT id, event_date::text AS event_date, status::text AS status
-      FROM bookings WHERE id = ${id}::uuid
-    `) as Array<{ id: string; event_date: string; status: string }>;
-
-    if (!existing[0]) {
-      return null;
-    }
-
     const rows = (await sql`
       UPDATE bookings
       SET
-        status = COALESCE(${u.status ?? null}::booking_status, status),
-        notes = COALESCE(${u.notes ?? null}, notes),
-        total_price = COALESCE(${u.total_price ?? null}, total_price),
-        package = COALESCE(${u.package ?? null}, package)
+        event_date = CASE WHEN ${hasEventDate} THEN ${u.event_date ?? null}::date ELSE event_date END,
+        package = CASE WHEN ${hasPackage} THEN ${u.package ?? null} ELSE package END,
+        customer_name = CASE WHEN ${hasCustomerName} THEN ${u.customer_name ?? null} ELSE customer_name END,
+        customer_phone = CASE WHEN ${hasCustomerPhone} THEN ${u.customer_phone ?? null} ELSE customer_phone END,
+        customer_address = CASE WHEN ${hasCustomerAddress} THEN ${u.customer_address ?? null} ELSE customer_address END,
+        notes = CASE WHEN ${hasNotes} THEN ${u.notes ?? null} ELSE notes END,
+        status = CASE WHEN ${hasStatus} THEN ${u.status ?? null}::booking_status ELSE status END,
+        total_price = CASE WHEN ${hasTotalPrice} THEN ${u.total_price ?? null}::numeric ELSE total_price END,
+        setup_start = CASE WHEN ${hasSetupStart} THEN ${u.setup_start ?? null}::time ELSE setup_start END,
+        setup_end = CASE WHEN ${hasSetupEnd} THEN ${u.setup_end ?? null}::time ELSE setup_end END
       WHERE id = ${id}::uuid
-      RETURNING id, event_date::text AS event_date, status::text AS status, notes, total_price, package, updated_at::text AS updated_at
+      RETURNING
+        id, created_at::text AS created_at, updated_at::text AS updated_at,
+        event_date::text AS event_date, setup_start::text AS setup_start, setup_end::text AS setup_end,
+        package, items, customer_name, customer_phone, customer_address, notes,
+        status::text AS status, source, total_price
     `) as BookingRow[];
 
-    return rows[0];
+    return rows[0] ? normalizeBookingOutput(rows[0]) : null;
   });
 
   if (!updated) {
@@ -180,7 +322,28 @@ adminRoutes.patch('/bookings/:id', async (c) => {
 });
 
 /**
- * P1: Manual date blocks ("Tutup / Penuh Total")
+ * DELETE /v1/admin/bookings/:id — Removes a booking permanently (F-01, F-19).
+ */
+adminRoutes.delete('/bookings/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!uuidRegex.test(id)) {
+    return c.json({ type: 'about:blank', title: 'Invalid ID', status: 400, detail: 'ID booking harus UUID valid' }, 400);
+  }
+
+  const deleted = await queryWithRetry(c.env, async (sql) => {
+    const rows = (await sql`DELETE FROM bookings WHERE id = ${id}::uuid RETURNING id`) as Array<{ id: string }>;
+    return rows.length > 0;
+  });
+
+  if (!deleted) {
+    return c.json({ type: 'about:blank', title: 'Not Found', status: 404, detail: 'Booking tidak ditemukan' }, 404);
+  }
+
+  return c.json({ ok: true, deleted_id: id });
+});
+
+/**
+ * P1: Manual date blocks ("Tutup / Penuh Total") — semantic date validation (F-07) & conflict count (F-11).
  */
 adminRoutes.get('/blocks', async (c) => {
   const blocks = await queryWithRetry(c.env, async (sql) => {
@@ -198,33 +361,58 @@ adminRoutes.post('/blocks', async (c) => {
   }
   const parsed = dateBlockSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json({ type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: parsed.error.issues[0]?.message }, 400);
+    return c.json(
+      { type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: parsed.error.issues.map((i) => i.message).join('; ') },
+      400
+    );
   }
 
-  await queryWithRetry(c.env, async (sql) => {
+  const existingBookings = await queryWithRetry(c.env, async (sql) => {
+    const countRows = (await sql`
+      SELECT COUNT(*)::int AS cnt FROM bookings
+      WHERE event_date = ${parsed.data.event_date}::date
+        AND status IN ('pending', 'booked', 'in_progress')
+    `) as Array<{ cnt: number }>;
+
     await sql`
       INSERT INTO date_blocks (event_date, reason)
       VALUES (${parsed.data.event_date}::date, ${parsed.data.reason})
       ON CONFLICT (event_date) DO UPDATE SET reason = EXCLUDED.reason
     `;
+    return countRows[0]?.cnt ?? 0;
   });
 
-  return c.json({ ok: true, event_date: parsed.data.event_date, reason: parsed.data.reason }, 201);
+  return c.json(
+    {
+      ok: true,
+      event_date: parsed.data.event_date,
+      reason: parsed.data.reason,
+      existing_bookings_count: existingBookings,
+    },
+    201
+  );
 });
 
 adminRoutes.delete('/blocks/:date', async (c) => {
   const date = c.req.param('date');
-  if (!dateRegex.test(date)) {
-    return c.json({ type: 'about:blank', title: 'Invalid Date', status: 400, detail: 'Format tanggal harus YYYY-MM-DD' }, 400);
+  if (!isValidCalendarDate(date)) {
+    return c.json({ type: 'about:blank', title: 'Invalid Date', status: 400, detail: 'Tanggal tidak valid (YYYY-MM-DD)' }, 400);
   }
-  await queryWithRetry(c.env, async (sql) => {
-    await sql`DELETE FROM date_blocks WHERE event_date = ${date}::date`;
+  const deleted = await queryWithRetry(c.env, async (sql) => {
+    const rows = (await sql`DELETE FROM date_blocks WHERE event_date = ${date}::date RETURNING event_date`) as Array<{
+      event_date: string;
+    }>;
+    return rows.length > 0;
   });
+
+  if (!deleted) {
+    return c.json({ type: 'about:blank', title: 'Not Found', status: 404, detail: 'Tanggal tutup tidak ditemukan' }, 404);
+  }
   return c.json({ ok: true });
 });
 
 /**
- * P1: Knowledge Base Management & RAG Ingestion
+ * P1: Knowledge Base Management & RAG Ingestion (F-14, F-19)
  */
 adminRoutes.get('/knowledge', async (c) => {
   const docs = await queryWithRetry(c.env, async (sql) => {
@@ -249,7 +437,10 @@ adminRoutes.post('/knowledge', async (c) => {
   }
   const parsed = knowledgeUploadSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json({ type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: parsed.error.issues[0]?.message }, 400);
+    return c.json(
+      { type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: parsed.error.issues.map((i) => i.message).join('; ') },
+      400
+    );
   }
 
   const { title, content, mime } = parsed.data;
@@ -265,7 +456,6 @@ adminRoutes.post('/knowledge', async (c) => {
     return inserted[0];
   });
 
-  // Embed & insert chunks
   for (const ch of chunks) {
     const vec = await embedText(c.env, ch.content);
     const vecLiteral = vec ? formatVectorLiteral(vec) : null;
@@ -289,15 +479,19 @@ adminRoutes.post('/knowledge', async (c) => {
 
 adminRoutes.delete('/knowledge/:id', async (c) => {
   const id = c.req.param('id');
-  await queryWithRetry(c.env, async (sql) => {
-    await sql`DELETE FROM knowledge_docs WHERE id = ${id}::uuid`;
+  if (!uuidRegex.test(id)) {
+    return c.json({ type: 'about:blank', title: 'Invalid ID', status: 400, detail: 'ID dokumen harus UUID valid' }, 400);
+  }
+  const deleted = await queryWithRetry(c.env, async (sql) => {
+    const rows = (await sql`DELETE FROM knowledge_docs WHERE id = ${id}::uuid RETURNING id`) as Array<{ id: string }>;
+    return rows.length > 0;
   });
+  if (!deleted) {
+    return c.json({ type: 'about:blank', title: 'Not Found', status: 404, detail: 'Dokumen tidak ditemukan' }, 404);
+  }
   return c.json({ ok: true });
 });
 
-/**
- * P1: Re-embed all rag_chunks (e.g. seeded chunks or after switching embedder)
- */
 adminRoutes.post('/knowledge/reindex', async (c) => {
   const onlyMissing = c.req.query('missing') !== 'false';
   const chunks = await queryWithRetry(c.env, async (sql) => {
@@ -364,9 +558,17 @@ adminRoutes.get('/settings', async (c) => {
 });
 
 adminRoutes.put('/settings', async (c) => {
-  const body = (await c.req.json()) as Record<string, unknown>;
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json({ type: 'about:blank', title: 'Validasi Gagal', status: 400, detail: 'Body harus berupa objek JSON' }, 400);
+  }
   await queryWithRetry(c.env, async (sql) => {
-    for (const [key, value] of Object.entries(body)) {
+    for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
       await sql`
         INSERT INTO settings (key, value)
         VALUES (${key}, ${JSON.stringify(value)}::jsonb)
@@ -378,16 +580,23 @@ adminRoutes.put('/settings', async (c) => {
 });
 
 /**
- * P2: Home Server Sync Pull Endpoint
+ * P2: Home Server Sync Pull Endpoint — supports `?since=ISO` & `?limit=` (F-10).
  */
 adminRoutes.get('/sync', async (c) => {
-  const since = c.req.query('since');
+  const since = c.req.query('since')?.trim();
+  const limitRaw = Number(c.req.query('limit') ?? 200);
+  const limit = Number.isFinite(limitRaw) ? Math.min(500, Math.max(1, Math.floor(limitRaw))) : 200;
+
+  if (since && Number.isNaN(Date.parse(since))) {
+    return c.json({ type: 'about:blank', title: 'Invalid Since', status: 400, detail: 'Parameter since harus ISO timestamp valid' }, 400);
+  }
+
   const data = await queryWithRetry(c.env, async (sql) => {
     const bookings = since
-      ? await sql`SELECT * FROM bookings WHERE updated_at >= ${since}::timestamptz ORDER BY updated_at ASC`
-      : await sql`SELECT * FROM bookings ORDER BY created_at DESC LIMIT 500`;
+      ? await sql`SELECT * FROM bookings WHERE updated_at >= ${since}::timestamptz ORDER BY updated_at ASC LIMIT ${limit}`
+      : await sql`SELECT * FROM bookings ORDER BY created_at DESC LIMIT ${limit}`;
     const blocks = await sql`SELECT * FROM date_blocks ORDER BY event_date ASC`;
-    return { synced_at: new Date().toISOString(), bookings, date_blocks: blocks };
+    return { synced_at: new Date().toISOString(), count: bookings.length, bookings, date_blocks: blocks };
   });
   return c.json(data);
 });
