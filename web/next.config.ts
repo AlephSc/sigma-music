@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next';
 
 const WORKER_ORIGIN = (
-  process.env.NEXT_PUBLIC_WORKER_URL || 'https://sigma-music-worker.alephsc25.workers.dev'
+  process.env.NEXT_PUBLIC_WORKER_URL || 'https://api.sigmamusic.my.id'
 ).replace(/\/+$/, '');
 
 const CSP_HEADER = [
@@ -10,7 +10,7 @@ const CSP_HEADER = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self' ${WORKER_ORIGIN} https://api.sigmamusic.my.id`,
+  `connect-src 'self' ${WORKER_ORIGIN}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

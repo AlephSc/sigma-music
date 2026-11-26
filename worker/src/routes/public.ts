@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { queryWithRetry } from '../db/client';
 import { hashIp } from '../lib/auth';
+import { readContextJson } from '../lib/body';
 import { checkRateLimit } from '../lib/rateLimit';
 import { sanitizeChatInput } from '../lib/sanitize';
 import { chatRequestSchema, createBookingSchema, isValidMonth } from '../lib/validation';
@@ -8,7 +9,7 @@ import { dispatchBookingWebhook } from '../lib/webhook';
 import { handleChatTurn } from '../rag/chat';
 import type { DayAvailabilityStatus, Env } from '../types';
 
-export const publicRoutes = new Hono<{ Bindings: Env }>();
+export const publicRoutes = new Hono<{ Bindings: Env; Variables: { rawBody?: string } }>();
 
 function getClientIp(req: Request): string {
   return req.headers.get('CF-Connecting-IP') || req.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || '127.0.0.1';
@@ -40,6 +41,7 @@ publicRoutes.get('/health', async (c) => {
 /**
  * GET /v1/availability?month=YYYY-MM
  * - Validates semantic month 01-12 and year 2000-2100 (F-06).
+ * - Exposes ONLY confirmed/active events (`booked`, `in_progress`, `completed`) and manual `closed` blocks so unverified `pending` bookings never pollute the public calendar (F-09).
  * - Preserves booking count even when a date is closed (F-11).
  * - Does not expose internal admin `reason` publicly (F-15).
  * - Counts `completed` events as occupied/busy rather than free (F-16).
@@ -71,7 +73,7 @@ publicRoutes.get('/availability', async (c) => {
       FROM bookings
       WHERE event_date >= ${startDate}::date
         AND event_date <= ${endDate}::date
-        AND status IN ('pending', 'booked', 'in_progress', 'completed')
+        AND status IN ('booked', 'in_progress', 'completed')
     `) as Array<{ event_date: string; status: string }>;
 
     const blocks = (await sql`
@@ -81,10 +83,9 @@ publicRoutes.get('/availability', async (c) => {
         AND event_date <= ${endDate}::date
     `) as Array<{ event_date: string }>;
 
-    const counts = new Map<string, { pending: number; active: number; inProgress: number }>();
+    const counts = new Map<string, { active: number; inProgress: number }>();
     for (const row of bookings) {
-      const entry = counts.get(row.event_date) ?? { pending: 0, active: 0, inProgress: 0 };
-      if (row.status === 'pending') entry.pending += 1;
+      const entry = counts.get(row.event_date) ?? { active: 0, inProgress: 0 };
       if (row.status === 'booked' || row.status === 'completed') entry.active += 1;
       if (row.status === 'in_progress') {
         entry.active += 1;
@@ -99,7 +100,7 @@ publicRoutes.get('/availability', async (c) => {
     for (let d = 1; d <= lastDay; d++) {
       const dateStr = `${yearStr}-${monthStr}-${String(d).padStart(2, '0')}`;
       const cEntry = counts.get(dateStr);
-      const totalCount = cEntry ? cEntry.active + cEntry.pending : 0;
+      const totalCount = cEntry ? cEntry.active : 0;
 
       if (blockedSet.has(dateStr)) {
         days.push({ date: dateStr, status: 'closed', count: totalCount });
@@ -109,10 +110,8 @@ publicRoutes.get('/availability', async (c) => {
         days.push({ date: dateStr, status: 'free', count: 0 });
       } else if (cEntry.inProgress > 0) {
         days.push({ date: dateStr, status: 'in_progress', count: totalCount });
-      } else if (cEntry.active > 0) {
-        days.push({ date: dateStr, status: 'busy', count: totalCount });
       } else {
-        days.push({ date: dateStr, status: 'pending', count: totalCount });
+        days.push({ date: dateStr, status: 'busy', count: totalCount });
       }
     }
 
@@ -146,7 +145,7 @@ publicRoutes.get('/packages', (c) => {
 /**
  * POST /v1/bookings
  * - Validates JSON & schema BEFORE consuming valid-booking quota so user typos don't lock them out (F-09).
- * - Separate loose abuse cap (30/hr) for malformed requests, and 10 valid bookings/hr per IP.
+ * - Checks honeypot BEFORE consuming valid-booking quota and returns an explicit 400 signal (F-31).
  */
 publicRoutes.post('/bookings', async (c) => {
   const ip = getClientIp(c.req.raw);
@@ -154,7 +153,7 @@ publicRoutes.post('/bookings', async (c) => {
 
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     const abuse = await checkRateLimit(c.env, `booking-invalid:${ipHash}`, 30, 3600);
     if (!abuse.allowed) {
@@ -188,7 +187,23 @@ publicRoutes.post('/bookings', async (c) => {
     );
   }
 
-  // Consume valid booking quota only after validation passes (F-09)
+  // Explicit honeypot signal BEFORE consuming valid-booking quota (F-31)
+  if (parsed.data.website && parsed.data.website.trim().length > 0) {
+    return c.json(
+      {
+        ok: false,
+        honeypot: true,
+        type: 'about:blank',
+        title: 'Pengiriman Otomatis Terdeteksi',
+        status: 400,
+        detail:
+          'Permohonan terdeteksi diisi otomatis (autofill/bot) sehingga tidak disimpan. Jika Anda pengguna asli, muat ulang halaman atau hubungi WhatsApp 0858-1668-6900.',
+      },
+      400
+    );
+  }
+
+  // Consume valid booking quota only after validation & honeypot checks pass (F-09)
   const rl = await checkRateLimit(c.env, `booking:${ipHash}`, 10, 3600);
   if (!rl.allowed) {
     return c.json(
@@ -200,18 +215,6 @@ publicRoutes.post('/bookings', async (c) => {
       },
       429,
       { 'Retry-After': String(rl.retryAfterSeconds) }
-    );
-  }
-
-  // Honeypot check
-  if (parsed.data.website && parsed.data.website.trim().length > 0) {
-    return c.json(
-      {
-        ok: true,
-        status: 'pending',
-        message: 'Permohonan booking diterima dan menunggu verifikasi admin.',
-      },
-      201
     );
   }
 
@@ -301,12 +304,12 @@ publicRoutes.post('/bookings', async (c) => {
 
 /**
  * POST /v1/chat
- * RAG AI Chatbot endpoint — rate-limited per IP (15/min) AND per session_id (10/min) (F-13).
+ * RAG AI Chatbot endpoint — rate-limited per IP (6/min) AND per session_id (5/min) (F-13).
  */
 publicRoutes.post('/chat', async (c) => {
   const ip = getClientIp(c.req.raw);
   const ipHash = await hashIp(ip);
-  const rl = await checkRateLimit(c.env, `chat:${ipHash}`, 15, 60);
+  const rl = await checkRateLimit(c.env, `chat:${ipHash}`, 6, 60);
   if (!rl.allowed) {
     return c.json(
       {
@@ -322,7 +325,7 @@ publicRoutes.post('/chat', async (c) => {
 
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus berupa JSON valid' }, 400);
   }
@@ -341,7 +344,7 @@ publicRoutes.post('/chat', async (c) => {
   }
 
   if (parsed.data.session_id) {
-    const sessRl = await checkRateLimit(c.env, `chat-sess:${parsed.data.session_id}`, 10, 60);
+    const sessRl = await checkRateLimit(c.env, `chat-sess:${parsed.data.session_id}`, 5, 60);
     if (!sessRl.allowed) {
       return c.json(
         {

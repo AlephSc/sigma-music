@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeOrigin } from '../index';
 import { signAdminJwt, verifyAdminJwt } from '../lib/auth';
+import { PayloadTooLargeError, readTextWithLimit } from '../lib/body';
+import { peekRateLimit, recordRateLimitHit, resetRateLimit } from '../lib/rateLimit';
 import { guardOutputPii, sanitizeChatInput } from '../lib/sanitize';
 import {
   cleanDisplayText,
@@ -12,6 +14,7 @@ import {
 } from '../lib/validation';
 import { chunkDocument } from '../rag/chunker';
 import { buildOrTsQuery, fuseRrf } from '../rag/retriever';
+import type { Env } from '../types';
 
 describe('Indonesian phone normalization', () => {
   it('normalizes 08..., +628..., 628..., and spaced numbers', () => {
@@ -155,5 +158,61 @@ describe('Pentest regression guards (F-01, F-05, F-06, F-07, F-22, F-23)', () =>
     expect(normalizeOrigin('HTTPS://WWW.SIGMAMUSIC.MY.ID:443')).toBe('https://www.sigmamusic.my.id');
     expect(normalizeOrigin('https://sigmamusic.my.id.')).toBe('https://sigmamusic.my.id');
     expect(cleanDisplayText('Paket \u202E spoof \u200E')).toBe('Paket  spoof');
+  });
+
+  it('rejects oversized bodies via streaming byte limit even without Content-Length (F-26b)', async () => {
+    const encoder = new TextEncoder();
+    const okReq = new Request('https://example.test/v1/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: 'halo' }),
+    });
+    expect(await readTextWithLimit(okReq, 1024)).toContain('halo');
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('a'.repeat(500)));
+        controller.enqueue(encoder.encode('b'.repeat(600)));
+        controller.close();
+      },
+    });
+    const chunkedTooBig = new Request('https://example.test/v1/chat', {
+      method: 'POST',
+      body: stream,
+      // @ts-expect-error duplex required in undici/Node fetch Request
+      duplex: 'half',
+    });
+    await expect(readTextWithLimit(chunkedTooBig, 1024)).rejects.toBeInstanceOf(PayloadTooLargeError);
+
+    const clTooBig = new Request('https://example.test/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Length': '2048' },
+      body: '{}',
+    });
+    await expect(readTextWithLimit(clTooBig, 1024)).rejects.toBeInstanceOf(PayloadTooLargeError);
+  });
+
+  it('counts only failed login attempts and resets on success (F-03, F-32)', async () => {
+    const fakeEnv = {} as Env;
+    const key = 'login-fail-test-1';
+    await resetRateLimit(fakeEnv, key);
+
+    // 10 consecutive peeks (simulating successful logins) never block
+    for (let i = 0; i < 10; i++) {
+      const p = await peekRateLimit(fakeEnv, key, 5, 900);
+      expect(p.allowed).toBe(true);
+    }
+
+    // 5 recorded failures lock out on the 6th peek
+    for (let i = 0; i < 5; i++) {
+      await recordRateLimitHit(fakeEnv, key, 900);
+    }
+    const blocked = await peekRateLimit(fakeEnv, key, 5, 900);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
+
+    // Successful login resets the bucket
+    await resetRateLimit(fakeEnv, key);
+    const recovered = await peekRateLimit(fakeEnv, key, 5, 900);
+    expect(recovered.allowed).toBe(true);
   });
 });

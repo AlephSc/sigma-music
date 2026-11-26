@@ -20,7 +20,14 @@ export interface Env {
   SYNC_API_KEY?: string;
   RATE_LIMIT_KV?: KVNamespace;
   AI?: {
-    run: (model: string, input: unknown) => Promise<{ data?: number[][] }>;
+    run: (
+      model: string,
+      input: unknown
+    ) => Promise<{
+      data?: number[][];
+      response?: string;
+      choices?: Array<{ message?: { content?: string } }>;
+    }>;
   };
 }
 

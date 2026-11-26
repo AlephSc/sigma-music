@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2025-02-14"
 compatibility_flags = ["nodejs_compat"]
 
+routes = [
+  { pattern = "api.sigmamusic.my.id", custom_domain = true }
+]
+
 [vars]
 ALLOWED_ORIGINS = "https://sigmamusic.my.id,https://www.sigmamusic.my.id,https://sigma-music.vercel.app,http://localhost:3000"
 OPENROUTER_MODEL = "openrouter/auto"

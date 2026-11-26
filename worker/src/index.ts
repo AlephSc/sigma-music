@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { queryWithRetry } from './db/client';
+import { PayloadTooLargeError, readTextWithLimit } from './lib/body';
 import { adminRoutes } from './routes/admin';
 import { publicRoutes } from './routes/public';
 import type { Env } from './types';
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env; Variables: { rawBody?: string } }>();
 
 /**
  * Normalizes an Origin string: lowercase, strip default port (:443 / :80) and trailing dot (F-22).
@@ -32,47 +33,7 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
 });
 
-// Strict Content-Type (F-20) and Body Size Limit (F-26) for mutating requests
-app.use('*', async (c, next) => {
-  const method = c.req.method.toUpperCase();
-  if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
-    // Allow empty-body POST to /v1/admin/logout and /v1/admin/knowledge/reindex
-    const isNoBodyEndpoint =
-      c.req.path === '/v1/admin/logout' || c.req.path === '/v1/admin/knowledge/reindex';
-
-    if (!isNoBodyEndpoint) {
-      const ct = (c.req.header('Content-Type') || '').toLowerCase();
-      if (!ct.startsWith('application/json')) {
-        return c.json(
-          {
-            type: 'about:blank',
-            title: 'Unsupported Media Type',
-            status: 415,
-            detail: 'Content-Type harus application/json',
-          },
-          415
-        );
-      }
-    }
-
-    const maxBytes = c.req.path.startsWith('/v1/admin/knowledge') ? 128 * 1024 : 64 * 1024;
-    const clHeader = c.req.header('Content-Length');
-    if (clHeader && Number(clHeader) > maxBytes) {
-      return c.json(
-        {
-          type: 'about:blank',
-          title: 'Payload Too Large',
-          status: 413,
-          detail: `Ukuran body maksimal ${Math.round(maxBytes / 1024)} KB`,
-        },
-        413
-      );
-    }
-  }
-  await next();
-});
-
-// Normalized CORS allowlist (F-22)
+// Normalized CORS allowlist (F-22) placed before Content-Type/size guards so error responses carry CORS headers
 app.use('*', async (c, next) => {
   const rawOrigins =
     c.env.ALLOWED_ORIGINS ||
@@ -96,6 +57,56 @@ app.use('*', async (c, next) => {
   });
 
   return corsMiddleware(c, next);
+});
+
+// Strict Content-Type (F-20) and streaming Body Size Limit (F-26b) for mutating requests
+app.use('*', async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
+    // Allow empty-body POST to /v1/admin/logout and /v1/admin/knowledge/reindex
+    const isNoBodyEndpoint =
+      c.req.path === '/v1/admin/logout' || c.req.path === '/v1/admin/knowledge/reindex';
+
+    if (!isNoBodyEndpoint) {
+      const ct = (c.req.header('Content-Type') || '').toLowerCase();
+      if (!ct.startsWith('application/json')) {
+        return c.json(
+          {
+            type: 'about:blank',
+            title: 'Unsupported Media Type',
+            status: 415,
+            detail: 'Content-Type harus application/json',
+          },
+          415
+        );
+      }
+    }
+
+    const maxBytes = isNoBodyEndpoint
+      ? 4 * 1024
+      : c.req.path.startsWith('/v1/admin/knowledge')
+      ? 128 * 1024
+      : 64 * 1024;
+
+    try {
+      const rawBody = await readTextWithLimit(c.req.raw, maxBytes);
+      c.set('rawBody', rawBody);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        return c.json(
+          {
+            type: 'about:blank',
+            title: 'Payload Too Large',
+            status: 413,
+            detail: err.message,
+          },
+          413
+        );
+      }
+      throw err;
+    }
+  }
+  await next();
 });
 
 app.onError((err, c) => {

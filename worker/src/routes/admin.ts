@@ -9,7 +9,8 @@ import {
   verifyAdminJwt,
   type AdminJwtPayload,
 } from '../lib/auth';
-import { checkRateLimit } from '../lib/rateLimit';
+import { readContextJson } from '../lib/body';
+import { checkRateLimit, peekRateLimit, recordRateLimitHit, resetRateLimit } from '../lib/rateLimit';
 import {
   dateBlockSchema,
   isValidCalendarDate,
@@ -25,7 +26,7 @@ import type { BookingRow, Env } from '../types';
 
 export const adminRoutes = new Hono<{
   Bindings: Env;
-  Variables: { adminEmail: string; adminPayload?: AdminJwtPayload };
+  Variables: { adminEmail: string; adminPayload?: AdminJwtPayload; rawBody?: string };
 }>();
 
 function getClientIp(req: Request): string {
@@ -47,14 +48,29 @@ adminRoutes.use('*', async (c, next) => {
 
 /**
  * POST /v1/admin/login
- * Rate-limited per IP and per email: 5 attempts / 15 minutes (F-03).
+ * Rate-limited ONLY on failed attempts per IP (5/15m) and per email (5/15m), reset on success (F-03, F-32).
  */
 adminRoutes.post('/login', async (c) => {
   const ip = getClientIp(c.req.raw);
   const ipHash = await hashIp(ip);
 
-  const ipRl = await checkRateLimit(c.env, `login-ip:${ipHash}`, 5, 900);
-  if (!ipRl.allowed) {
+  // Generous safety cap against token-minting floods
+  const safetyRl = await checkRateLimit(c.env, `login-total-ip:${ipHash}`, 30, 900);
+  if (!safetyRl.allowed) {
+    return c.json(
+      {
+        type: 'about:blank',
+        title: 'Terlalu Banyak Percobaan Login',
+        status: 429,
+        detail: 'Terlalu banyak permintaan login. Coba lagi dalam beberapa menit.',
+      },
+      429,
+      { 'Retry-After': String(safetyRl.retryAfterSeconds) }
+    );
+  }
+
+  const ipFail = await peekRateLimit(c.env, `login-fail-ip:${ipHash}`, 5, 900);
+  if (!ipFail.allowed) {
     return c.json(
       {
         type: 'about:blank',
@@ -63,13 +79,13 @@ adminRoutes.post('/login', async (c) => {
         detail: 'Terlalu banyak percobaan login gagal. Coba lagi dalam beberapa menit.',
       },
       429,
-      { 'Retry-After': String(ipRl.retryAfterSeconds) }
+      { 'Retry-After': String(ipFail.retryAfterSeconds) }
     );
   }
 
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
   }
@@ -80,17 +96,17 @@ adminRoutes.post('/login', async (c) => {
   }
 
   const emailNorm = parsed.data.email.trim().toLowerCase();
-  const emailRl = await checkRateLimit(c.env, `login-email:${emailNorm}`, 5, 900);
-  if (!emailRl.allowed) {
+  const emailFail = await peekRateLimit(c.env, `login-fail-email:${emailNorm}`, 5, 900);
+  if (!emailFail.allowed) {
     return c.json(
       {
         type: 'about:blank',
         title: 'Terlalu Banyak Percobaan Login',
         status: 429,
-        detail: 'Terlalu banyak percobaan login untuk akun ini. Coba lagi dalam beberapa menit.',
+        detail: 'Terlalu banyak percobaan login gagal untuk akun ini. Coba lagi dalam beberapa menit.',
       },
       429,
-      { 'Retry-After': String(emailRl.retryAfterSeconds) }
+      { 'Retry-After': String(emailFail.retryAfterSeconds) }
     );
   }
 
@@ -107,8 +123,17 @@ adminRoutes.post('/login', async (c) => {
   const passOk = constantTimeEqual(parsed.data.password, expectedPass);
 
   if (!emailOk || !passOk) {
+    await Promise.all([
+      recordRateLimitHit(c.env, `login-fail-ip:${ipHash}`, 900),
+      recordRateLimitHit(c.env, `login-fail-email:${emailNorm}`, 900),
+    ]);
     return c.json({ type: 'about:blank', title: 'Unauthorized', status: 401, detail: 'Email atau password salah' }, 401);
   }
+
+  await Promise.all([
+    resetRateLimit(c.env, `login-fail-ip:${ipHash}`),
+    resetRateLimit(c.env, `login-fail-email:${emailNorm}`),
+  ]);
 
   const ttlSeconds = 7200; // 2 hours (F-12)
   const token = await signAdminJwt(expectedEmail, c.env.JWT_SECRET, ttlSeconds);
@@ -264,7 +289,7 @@ adminRoutes.patch('/bookings/:id', async (c) => {
 
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
   }
@@ -355,7 +380,7 @@ adminRoutes.get('/blocks', async (c) => {
 adminRoutes.post('/blocks', async (c) => {
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
   }
@@ -431,7 +456,7 @@ adminRoutes.get('/knowledge', async (c) => {
 adminRoutes.post('/knowledge', async (c) => {
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 128 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
   }
@@ -560,7 +585,7 @@ adminRoutes.get('/settings', async (c) => {
 adminRoutes.put('/settings', async (c) => {
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await readContextJson(c, 64 * 1024);
   } catch {
     return c.json({ type: 'about:blank', title: 'Invalid JSON', status: 400, detail: 'Body harus JSON valid' }, 400);
   }

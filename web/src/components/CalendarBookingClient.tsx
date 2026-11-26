@@ -320,10 +320,6 @@ export function CalendarBookingClient() {
                 Kosong
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-[var(--accent)]" />
-                Antrean Pending
-              </span>
-              <span className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
                 Ada Agenda
               </span>
@@ -373,9 +369,6 @@ export function CalendarBookingClient() {
                   } else if (d.status === 'busy' || d.status === 'in_progress') {
                     dotClass = 'bg-amber-400';
                     statusLabel = 'Ada Agenda';
-                  } else if (d.status === 'pending') {
-                    dotClass = 'bg-[var(--accent)]';
-                    statusLabel = 'Antrean Pending';
                   }
 
                   return (
@@ -537,13 +530,15 @@ export function CalendarBookingClient() {
               <form onSubmit={handleSubmit} className="space-y-4 text-sm">
                 {/* Honeypot */}
                 <div className="hidden" aria-hidden="true">
-                  <label htmlFor="website">Website</label>
+                  <label htmlFor="sigma_hp_field">Website</label>
                   <input
-                    id="website"
-                    name="website"
+                    id="sigma_hp_field"
+                    name="sigma_hp_field"
                     type="text"
                     tabIndex={-1}
-                    autoComplete="off"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     value={websiteHoneypot}
                     onChange={(e) => setWebsiteHoneypot(e.target.value)}
                   />
@@ -663,9 +658,19 @@ export function CalendarBookingClient() {
                 </div>
 
                 {submitError && (
-                  <div className="flex items-start gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-400">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{submitError}</span>
+                  <div className="space-y-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-400">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{submitError}</span>
+                    </div>
+                    <a
+                      href={`https://wa.me/${WA_NUMBER}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block pl-6 font-semibold underline hover:text-rose-300"
+                    >
+                      Hubungi WhatsApp {WA_DISPLAY}
+                    </a>
                   </div>
                 )}
 
